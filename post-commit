@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# This file goes in .git/hooks/post-commit
+# $ chmod 700 .git/hooks/post-commit
+
+# Usage: bash .git/hooks/post-commit [commit distance from HEAD]
+# The optional argument is passed to the --skip option of git log.
+
+# PREREQUISITES
+
+# This script needs sqlite3. It creates a small db in your home directory
+# called .patternicom_projects.db
+# It holds the mappings between project names and the numerical
+# id needed by patterni.com as the y coordinate of the events.
+# $ sudo apt-get intall sqlite3
+
+
+# SETUP AND CONFIGURATION
+
+# You must tell the script what's the name of the project.
+# It will be diplayed in the mouseover popups in the graph.
+# Do this in the home directory of the project.
+# $ echo your_project_name > .patternicom_id
+
+# Edit the line below and insert the write API key for the channel you want
+# to send the data to.
+write_api_key="YOUR WRITE API KEY GOES HERE"
+
+# You might want to go to the end of the file and edit the curl command
+# to customize the data you send to the server.
+
+
+# HOW TO USE
+
+# Just use git commit as usual.
+# You'll see "ack" at the beginning of the output of the commit command.
+# This means that patterni.com got the data and stored it.
+# You can turn off that output if that interferes with some other tool your using
+# which reads the output of git commit and gets confused by the different
+# format of the first line. This is how to do it:
+#   Edit the curl command at the end. This should silence it:
+#   curl -s -o /dev/null ...
+#   Also delete the echo command on the last line.
+
+# To manually send the last commit's data to patterni.com
+# $ bash .git/hooks/post-commit
+
+# To import all the past commits of a project:
+#
+# 1) Count the commits with
+# $ git log|egrep -e '^commit '|wc -l
+#
+# 2) Import with
+# $ for ((i = 0; i < COUNT ; i++)); do bash .git/hooks/post-commit $i; done
+
+
+# ADVANCED SETUP
+
+# To install this as hook in every new git repository
+# follow the instructions at to https://coderwall.com/p/jp7d5q
+
+skip=$1
+if [ -z "$skip" ]; then
+    skip=0
+fi
+
+projects_db=$HOME/.patternicom_projects.db
+
+# 1. If the db to store the y_id, project_name pairs doesn't exist, create it
+if [ ! -r $projects_db ]; then
+    sqlite3 $projects_db 'create table projects(id integer primary key autoincrement, name text)'
+fi
+
+# 2. Find the file with the project name
+current_dir=$PWD
+project_name=
+while [[ $PWD != / ]] ; do
+    if [ -r .patternicom_id ]; then
+	project_name=`cat .patternicom_id`
+	break
+    fi
+    cd ..
+done
+
+if [ -z "$project_name" ]; then
+    echo "Can't find a project for this repository"
+    echo "Data not sent to patterni.com"
+    exit 0
+fi
+
+# 3. Get the y_value from the database
+
+cd "$current_dir"
+
+project_id=`sqlite3 -list $projects_db "select id from projects where name='${project_name}'"`
+if [ -z "$project_id" ]; then
+    sqlite3 -line $projects_db "insert into projects (name) values ('${project_name}')"
+    project_id=`sqlite3 -list $projects_db "select id from projects where name='${project_name}'"`
+    if [ -z "$project_id" ]; then
+	# something very bad happened to the db
+	echo "db error"
+	echo "Data not sent to patterni.com"
+	exit 0
+    fi
+fi
+
+# 4. Get information about the commit
+
+get_value_at() {
+    local line=$1
+    echo -e "$commit_info" | sed "${line}q;d"
+}
+
+
+commit_info=`git log --format=format:"%H%n%aN%n%aE%n%at%n%ai%n%s%n%b%n" --skip=${skip} -1`
+sha1_id=$(get_value_at 1)
+author_name=$(get_value_at 2)
+author_email=$(get_value_at 3)
+commit_timestamp="$(get_value_at 4)"000  # milliseconds
+commit_iso8601=$(get_value_at 5)
+commit_subject_and_body=`echo -e "$commit_info" | tail -n +6`
+
+# Debug
+#echo $project_id
+#echo $sha1_id
+#echo $author_name
+#echo $author_email
+#echo $commit_timestamp
+#echo $commit_iso8601
+#echo -e $commit_subject_and_body
+
+curl -X POST http://patterni.com/send_data \
+  -d api_key=$write_api_key \
+  -d x_id="${commit_timestamp}" -d "x_value=${commit_iso8601}" \
+  -d y_id="${project_id}"       -d "y_value=${project_name}" \
+  -d 'keys[]=sha1_id'           -d "values[]=${sha1_id}" \
+  -d 'keys[]=author_name'       -d "values[]=${author_name}" \
+  -d 'keys[]=author_email'      -d "values[]=${author_email}" \
+  -d 'keys[]=subject_and_body'  -d "values[]=${commit_subject_and_body}"
+echo -n " "
