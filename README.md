@@ -10,5 +10,9 @@ go to the site, click Sign up, enter your email and we'll contact you soon.
 Scripts
 -------
 
-* post-commit - bash - a git post-commit hook that sends the information about a commit
-to a patterni.com channel. Usage and setup instructions in the file.
+* post-commit (bash)
+
+  A git post-commit hook that sends the information about a commit
+  to a patterni.com channel. Usage and setup instructions in the file.
+  This is the script used to send the data for one of the examples on
+  the home page.
